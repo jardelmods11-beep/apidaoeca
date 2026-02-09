@@ -1,156 +1,199 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from cnvsweb_scraper_fast import CNVSWebScraperFast
+from cnvsweb_scraper import CNVSWebScraper
 import threading
 import time
 import os
-from functools import lru_cache
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 CORS(app)
 
-# Token de acesso
-TOKEN = os.environ.get('TOKEN', 'HJK6V5MH')
+# Token de acesso (pode vir de variável de ambiente)
+TOKEN = os.environ.get('TOKEN', 'E22PFZRX')
 
-# Scraper global
+# Inicializa o scraper globalmente
 scraper = None
 scraper_ready = False
-
-# Thread pool para requests paralelas
-executor = ThreadPoolExecutor(max_workers=10)
 
 def initialize_scraper():
     """Inicializa o scraper em background"""
     global scraper, scraper_ready
     try:
-        print("🚀 Inicializando scraper otimizado...")
-        scraper = CNVSWebScraperFast(TOKEN)
+        print("🚀 Inicializando scraper...")
+        scraper = CNVSWebScraper(TOKEN)
         if scraper.login():
             scraper_ready = True
-            print("✓ Scraper pronto para uso!")
+            print("✓ Scraper inicializado com sucesso")
         else:
-            print("✗ Erro no login")
+            print("✗ Erro ao fazer login")
     except Exception as e:
-        print(f"✗ Erro: {e}")
+        print(f"✗ Erro ao inicializar scraper: {e}")
+        import traceback
+        traceback.print_exc()
 
+# Thread para manter a sessão ativa
 def keep_session_alive():
-    """Mantém sessão ativa"""
+    """Mantém a sessão ativa a cada 3 minutos"""
     while True:
-        time.sleep(180)
+        time.sleep(180)  # 3 minutos
         try:
             if scraper and scraper_ready:
                 scraper.keep_alive()
-        except:
-            pass
+        except Exception as e:
+            print(f"Erro no keep-alive: {e}")
 
-# Inicia scraper
+# Inicia o scraper em background
 init_thread = threading.Thread(target=initialize_scraper, daemon=True)
 init_thread.start()
 
-# Aguarda scraper
-print("⏳ Aguardando scraper...")
+# Aguarda até 15 segundos para o scraper estar pronto
+print("⏳ Aguardando scraper ficar pronto...")
 for i in range(15):
     if scraper_ready:
-        print(f"✓ Pronto em {i+1}s")
+        print(f"✓ Scraper pronto após {i+1} segundos")
         break
     time.sleep(1)
 
-# Keep-alive thread
+# Inicia thread de keep-alive
 keep_alive_thread = threading.Thread(target=keep_session_alive, daemon=True)
 keep_alive_thread.start()
 
 @app.route('/')
 def home():
-    """Informações da API"""
+    """Página inicial com informações da API"""
     return jsonify({
         'status': 'online',
-        'version': '4.0.0 - ULTRA FAST',
         'scraper_ready': scraper_ready,
+        'message': 'CNVSWeb Scraper API - Versão Otimizada',
+        'version': '4.0.0',
         'endpoints': {
-            'catalog': {
+            'most_watched': {
+                'url': '/api/most-watched',
+                'method': 'GET',
+                'description': 'Filmes/séries mais assistidos (PODE SER LENTO se get_video_urls=true)',
+                'params': {
+                    'limit': 'Opcional - Número máximo de resultados',
+                    'max_episodes': 'Opcional - Máximo de episódios por série (padrão: 5)',
+                    'organize': 'Opcional - true/false (padrão: true)'
+                }
+            },
+            'catalog_fast': {
                 'url': '/api/catalog',
                 'method': 'GET',
-                'description': '⚡ Lista RÁPIDA de filmes/séries (SEM links)',
+                'description': '⚡ RÁPIDO - Lista catálogo SEM links de vídeo (< 1s)',
                 'params': {
-                    'limit': 'Limite de resultados (padrão: 50)',
-                    'type': 'movie ou series (opcional)'
+                    'limit': 'Opcional - Número máximo de resultados',
+                    'type': 'Opcional - movie/series/all (padrão: all)'
                 },
-                'example': '/api/catalog?limit=20&type=movie'
+                'example': '/api/catalog?limit=50&type=movie'
             },
             'search': {
-                'url': '/api/search',
+                'url': '/api/search?q=query',
                 'method': 'GET',
-                'description': '🔍 Busca RÁPIDA (SEM links de vídeo)',
+                'description': 'Busca com URLs de vídeo (PODE SER LENTO)',
                 'params': {
-                    'q': 'Termo de busca',
-                    'limit': 'Limite de resultados'
+                    'q': 'Obrigatório - Termo de busca',
+                    'limit': 'Opcional - Número máximo de resultados',
+                    'max_episodes': 'Opcional - Máximo de episódios por série'
+                }
+            },
+            'search_fast': {
+                'url': '/api/search-fast?q=query',
+                'method': 'GET',
+                'description': '⚡ RÁPIDO - Busca SEM links de vídeo',
+                'params': {
+                    'q': 'Obrigatório - Termo de busca',
+                    'limit': 'Opcional - Número máximo de resultados'
                 },
-                'example': '/api/search?q=avengers&limit=10'
+                'example': '/api/search-fast?q=batman&limit=10'
             },
             'video_url': {
                 'url': '/api/video-url',
                 'method': 'POST',
-                'description': '🎥 Pega link DIRETO do vídeo (INSTANTÂNEO)',
+                'description': '🎥 Busca link direto SOB DEMANDA (quando usuário clica Assistir)',
                 'body': {
                     'player_url': 'URL do player do conteúdo'
                 },
-                'example': 'POST /api/video-url com {"player_url": "..."}'
-            },
-            'item_details': {
-                'url': '/api/item/<item_id>',
-                'method': 'GET',
-                'description': '📋 Detalhes de filme/série',
-                'example': '/api/item/123456'
+                'example': 'POST com {"player_url": "https://cnvsweb.stream/watch/123"}'
             }
         },
         'notes': [
-            '⚡ NOVA ARQUITETURA OTIMIZADA PARA STREAMING',
-            '🚀 Catálogo carrega INSTANTANEAMENTE (sem links)',
-            '🎥 Links de vídeo são buscados SOB DEMANDA',
-            '⏱️ Tempo de resposta < 300ms para catálogo',
-            '🔥 Tempo de resposta < 1s para link direto',
-            '💾 Cache inteligente para busca de links'
+            '⚡ NOVOS ENDPOINTS RÁPIDOS: /api/catalog e /api/search-fast',
+            '🎥 Link direto sob demanda: /api/video-url (POST)',
+            'Endpoints antigos continuam funcionando normalmente',
+            'Use endpoints rápidos para melhor experiência'
         ]
     })
 
 @app.route('/health')
 def health():
-    """Health check"""
+    """Health check endpoint"""
     return jsonify({
         'status': 'healthy' if scraper_ready else 'initializing',
         'scraper_ready': scraper_ready,
         'timestamp': time.time()
     })
 
-@app.route('/api/catalog')
-def catalog():
-    """
-    ⚡ ENDPOINT ULTRA RÁPIDO - Lista catálogo SEM links de vídeo
-    Retorna em <300ms
-    """
+# ========== ENDPOINTS ANTIGOS (mantidos para compatibilidade) ==========
+
+@app.route('/api/most-watched')
+def most_watched():
+    """Retorna os filmes/séries mais assistidos do dia COM URLs de vídeo - ORGANIZADO"""
     if not scraper_ready:
         return jsonify({
             'success': False,
-            'error': 'Inicializando... Tente em alguns segundos.'
+            'error': 'Scraper ainda está inicializando. Tente novamente em alguns segundos.'
         }), 503
     
     try:
-        limit = request.args.get('limit', default=50, type=int)
-        content_type = request.args.get('type', default='all', type=str)
+        limit = request.args.get('limit', type=int)
+        max_episodes = request.args.get('max_episodes', default=5, type=int)
+        organize = request.args.get('organize', default='true', type=str).lower() == 'true'
         
-        # Busca rápida sem URLs de vídeo
-        result = scraper.get_catalog_fast(limit=limit, content_type=content_type)
+        print("\n" + "="*50)
+        print("Extraindo filmes mais assistidos do dia...")
+        print("="*50 + "\n")
         
-        return jsonify({
-            'success': True,
-            'count': len(result.get('items', [])),
-            'data': result
-        })
+        result = scraper.get_most_watched_today(
+            get_video_urls=True,
+            max_episodes_per_series=max_episodes,
+            organize_output=organize
+        )
         
+        # Se retornou dados organizados
+        if isinstance(result, dict) and 'movies' in result:
+            movies = result['movies']
+            series = result['series']
+            
+            # Aplica limite se especificado
+            if limit and limit > 0:
+                movies = movies[:limit]
+                series = series[:limit]
+            
+            return jsonify({
+                'success': True,
+                'summary': {
+                    'total': result['summary']['total'],
+                    'movies': len(movies),
+                    'series': len(series)
+                },
+                'movies': movies,
+                'series': series
+            })
+        else:
+            # Formato antigo (lista simples)
+            if limit and limit > 0:
+                result = result[:limit]
+            
+            return jsonify({
+                'success': True,
+                'count': len(result),
+                'data': result
+            })
     except Exception as e:
-        print(f"Erro em /api/catalog: {e}")
+        print(f"Erro em /api/most-watched: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -158,37 +201,220 @@ def catalog():
 
 @app.route('/api/search')
 def search():
-    """
-    🔍 BUSCA RÁPIDA - Sem links de vídeo
-    Retorna em <500ms
-    """
+    """Busca filmes/séries por query COM URLs de vídeo - ORGANIZADO"""
     if not scraper_ready:
         return jsonify({
             'success': False,
-            'error': 'Inicializando... Tente em alguns segundos.'
+            'error': 'Scraper ainda está inicializando. Tente novamente em alguns segundos.'
         }), 503
     
     query = request.args.get('q', '')
-    limit = request.args.get('limit', default=20, type=int)
+    limit = request.args.get('limit', type=int)
+    max_episodes = request.args.get('max_episodes', default=5, type=int)
+    organize = request.args.get('organize', default='true', type=str).lower() == 'true'
     
     if not query:
         return jsonify({
             'success': False,
-            'error': 'Parâmetro "q" obrigatório'
+            'error': 'Query parameter "q" is required',
+            'example': '/api/search?q=avengers'
         }), 400
     
     try:
-        result = scraper.search_fast(query, limit=limit)
+        print("\n" + "="*50)
+        print(f"Buscando: {query}")
+        print("="*50 + "\n")
         
-        return jsonify({
-            'success': True,
-            'query': query,
-            'count': len(result.get('items', [])),
-            'data': result
-        })
+        result = scraper.search_movies(
+            query,
+            get_video_urls=True,
+            max_episodes_per_series=max_episodes,
+            organize_output=organize
+        )
         
+        # Se retornou dados organizados
+        if isinstance(result, dict) and 'movies' in result:
+            movies = result['movies']
+            series = result['series']
+            
+            # Aplica limite se especificado
+            if limit and limit > 0:
+                movies = movies[:limit]
+                series = series[:limit]
+            
+            return jsonify({
+                'success': True,
+                'query': query,
+                'summary': {
+                    'total': result['summary']['total'],
+                    'movies': len(movies),
+                    'series': len(series)
+                },
+                'movies': movies,
+                'series': series
+            })
+        else:
+            # Formato antigo (lista simples)
+            if limit and limit > 0:
+                result = result[:limit]
+            
+            return jsonify({
+                'success': True,
+                'query': query,
+                'count': len(result),
+                'data': result
+            })
     except Exception as e:
         print(f"Erro em /api/search: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/search-fast')
+def search_fast():
+    """Busca filmes/séries por query SEM URLs de vídeo (mais rápido) - ORGANIZADO"""
+    if not scraper_ready:
+        return jsonify({
+            'success': False,
+            'error': 'Scraper ainda está inicializando. Tente novamente em alguns segundos.'
+        }), 503
+    
+    query = request.args.get('q', '')
+    limit = request.args.get('limit', type=int)
+    organize = request.args.get('organize', default='true', type=str).lower() == 'true'
+    
+    if not query:
+        return jsonify({
+            'success': False,
+            'error': 'Query parameter "q" is required',
+            'example': '/api/search-fast?q=batman'
+        }), 400
+    
+    try:
+        print(f"\nBusca rápida: {query}")
+        result = scraper.search_movies(
+            query,
+            get_video_urls=False,  # RÁPIDO!
+            max_episodes_per_series=0,
+            organize_output=organize
+        )
+        
+        # Se retornou dados organizados
+        if isinstance(result, dict) and 'movies' in result:
+            movies = result['movies']
+            series = result['series']
+            
+            # Aplica limite se especificado
+            if limit and limit > 0:
+                movies = movies[:limit]
+                series = series[:limit]
+            
+            return jsonify({
+                'success': True,
+                'query': query,
+                'summary': {
+                    'total': result['summary']['total'],
+                    'movies': len(movies),
+                    'series': len(series)
+                },
+                'movies': movies,
+                'series': series
+            })
+        else:
+            # Formato antigo (lista simples)
+            if limit and limit > 0:
+                result = result[:limit]
+            
+            return jsonify({
+                'success': True,
+                'query': query,
+                'count': len(result),
+                'data': result
+            })
+    except Exception as e:
+        print(f"Erro em /api/search-fast: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+# ========== NOVOS ENDPOINTS OTIMIZADOS ==========
+
+@app.route('/api/catalog')
+def catalog():
+    """
+    ⚡ ENDPOINT ULTRA RÁPIDO
+    Retorna catálogo SEM buscar links de vídeo
+    Perfeito para carregamento inicial de apps
+    """
+    if not scraper_ready:
+        return jsonify({
+            'success': False,
+            'error': 'Scraper ainda está inicializando.'
+        }), 503
+    
+    try:
+        limit = request.args.get('limit', type=int)
+        content_type = request.args.get('type', default='all', type=str)
+        
+        print("\n⚡ Carregando catálogo rápido...")
+        
+        # Usa get_most_watched_today SEM buscar URLs de vídeo
+        result = scraper.get_most_watched_today(
+            get_video_urls=False,  # RÁPIDO: não busca links
+            max_episodes_per_series=0,
+            organize_output=True
+        )
+        
+        if isinstance(result, dict) and 'movies' in result:
+            movies = result['movies']
+            series = result['series']
+            
+            # Filtra por tipo se especificado
+            if content_type == 'movie':
+                series = []
+            elif content_type == 'series':
+                movies = []
+            
+            # Aplica limite
+            if limit and limit > 0:
+                movies = movies[:limit]
+                series = series[:limit]
+            
+            return jsonify({
+                'success': True,
+                'summary': {
+                    'total': len(movies) + len(series),
+                    'movies': len(movies),
+                    'series': len(series)
+                },
+                'data': {
+                    'movies': movies,
+                    'series': series
+                }
+            })
+        else:
+            # Lista simples
+            items = result if isinstance(result, list) else []
+            
+            if limit and limit > 0:
+                items = items[:limit]
+            
+            return jsonify({
+                'success': True,
+                'count': len(items),
+                'data': items
+            })
+            
+    except Exception as e:
+        print(f"Erro em /api/catalog: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -197,102 +423,74 @@ def search():
 @app.route('/api/video-url', methods=['POST'])
 def get_video_url():
     """
-    🎥 ENDPOINT CRÍTICO - Pega link DIRETO do vídeo
-    Chamado SOB DEMANDA quando usuário clica em "Assistir"
-    Retorna em <1s
+    🎥 ENDPOINT CRÍTICO - Busca link direto SOB DEMANDA
+    Recebe player_url e retorna video_url
+    Chamado quando usuário clica em "Assistir"
     """
     if not scraper_ready:
         return jsonify({
             'success': False,
-            'error': 'Inicializando...'
+            'error': 'Scraper não está pronto.'
         }), 503
     
     data = request.get_json()
-    player_url = data.get('player_url')
-    
-    if not player_url:
+    if not data or 'player_url' not in data:
         return jsonify({
             'success': False,
-            'error': 'player_url obrigatório'
+            'error': 'Campo "player_url" obrigatório no body JSON',
+            'example': '{"player_url": "https://cnvsweb.stream/watch/123"}'
         }), 400
     
+    player_url = data['player_url']
+    
     try:
-        # Extração OTIMIZADA do link direto
-        video_url = scraper.get_video_url_fast(player_url)
+        print(f"\n🎥 Buscando link de vídeo para: {player_url}")
+        
+        # Usa método do scraper original para extrair vídeo
+        video_url = scraper.get_video_url_from_player(player_url)
         
         if video_url:
+            print(f"✓ Link obtido: {video_url[:80]}...")
             return jsonify({
                 'success': True,
                 'video_url': video_url,
                 'player_url': player_url
             })
         else:
+            print("✗ Não foi possível extrair URL do vídeo")
             return jsonify({
                 'success': False,
-                'error': 'Link de vídeo não encontrado'
+                'error': 'Não foi possível extrair URL do vídeo'
             }), 404
             
     except Exception as e:
         print(f"Erro em /api/video-url: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
 
-@app.route('/api/item/<item_id>')
-def item_details(item_id):
-    """Detalhes de um item específico"""
-    if not scraper_ready:
-        return jsonify({
-            'success': False,
-            'error': 'Inicializando...'
-        }), 503
-    
-    try:
-        # Busca detalhes do item
-        result = scraper.get_item_details(item_id)
-        
-        if result:
-            return jsonify({
-                'success': True,
-                'data': result
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'error': 'Item não encontrado'
-            }), 404
-            
-    except Exception as e:
-        print(f"Erro em /api/item: {e}")
-        return jsonify({
-            'success': False,
-            'error': str(e)
-        }), 500
-
+# Tratamento de erros 404
 @app.errorhandler(404)
 def not_found(e):
     return jsonify({
         'success': False,
-        'error': 'Endpoint não encontrado',
-        'endpoints': [
+        'error': 'Endpoint not found',
+        'available_endpoints': [
             '/',
             '/health',
-            '/api/catalog',
+            '/api/most-watched',
+            '/api/catalog (RÁPIDO)',
             '/api/search?q=query',
-            '/api/video-url (POST)',
-            '/api/item/<id>'
+            '/api/search-fast?q=query (RÁPIDO)',
+            '/api/video-url (POST - SOB DEMANDA)'
         ]
     }), 404
 
 if __name__ == '__main__':
+    # Porta configurável para deploy
     port = int(os.environ.get('PORT', 5000))
-    # Usa gevent para performance
-    try:
-        from gevent.pywsgi import WSGIServer
-        print(f"🚀 Servidor rodando em http://0.0.0.0:{port} (Gevent)")
-        http_server = WSGIServer(('0.0.0.0', port), app)
-        http_server.serve_forever()
-    except ImportError:
-        print(f"🚀 Servidor rodando em http://0.0.0.0:{port} (Flask)")
-        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+    print(f"🚀 Servidor rodando em http://0.0.0.0:{port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
