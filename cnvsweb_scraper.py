@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import json
 from functools import lru_cache
 
-class CNVSWebScraperFast:
+class CNVSWebScraper:
     """
     Versão OTIMIZADA do scraper para streaming
     Foco em VELOCIDADE e performance
