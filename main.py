@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Token de acesso (pode vir de variável de ambiente)
-TOKEN = os.environ.get('TOKEN', 'G735PKGU')
+TOKEN = os.environ.get('TOKEN', 'CZR0775V')
 
 # Inicializa o scraper globalmente
 scraper = None
@@ -110,18 +110,30 @@ def home():
             'video_url': {
                 'url': '/api/video-url',
                 'method': 'POST',
-                'description': '🎥 Busca link direto SOB DEMANDA (quando usuário clica Assistir)',
+                'description': '🎥 Busca link direto SOB DEMANDA (filmes)',
                 'body': {
-                    'player_url': 'URL do player do conteúdo'
+                    'player_url': 'Watch link do filme (ex: /watch/dupla-perigosa)'
                 },
                 'example': 'POST com {"player_url": "https://cnvsweb.stream/watch/123"}'
+            },
+            'series_episodes': {
+                'url': '/api/series-episodes',
+                'method': 'POST',
+                'description': '📺 Busca todos episódios de uma série com vídeos',
+                'body': {
+                    'watch_link': 'Watch link da série (ex: /watch/breaking-bad)',
+                    'max_episodes': 'Opcional - Máximo de episódios a processar (0 = todos)',
+                    'get_video_urls': 'Opcional - Se deve buscar URLs de vídeo (padrão: true)'
+                },
+                'example': 'POST com {"watch_link": "https://cnvsweb.stream/watch/breaking-bad", "max_episodes": 10}'
             }
         },
         'notes': [
-            '⚡ NOVOS ENDPOINTS RÁPIDOS: /api/catalog e /api/search-fast',
-            '🎥 Link direto sob demanda: /api/video-url (POST)',
-            'Endpoints antigos continuam funcionando normalmente',
-            'Use endpoints rápidos para melhor experiência'
+            '⚡ ENDPOINTS RÁPIDOS: /api/catalog e /api/search-fast (< 1s)',
+            '🎥 Filmes: /api/video-url (POST) - busca vídeo em 2 etapas',
+            '📺 Séries: /api/series-episodes (POST) - busca todos episódios',
+            'Processo: watch_link → player_url → video_url',
+            'Endpoints antigos continuam funcionando normalmente'
         ]
     })
 
@@ -424,8 +436,13 @@ def catalog():
 def get_video_url():
     """
     🎥 ENDPOINT CRÍTICO - Busca link direto SOB DEMANDA
-    Recebe player_url e retorna video_url
+    Recebe player_url (watch_link) e retorna video_url
     Chamado quando usuário clica em "Assistir"
+    
+    PROCESSO:
+    1. Recebe watch_link (ex: /watch/dupla-perigosa)
+    2. Extrai player_url (botão ASSISTIR → iframe)
+    3. Extrai video_url (.mp4 do iframe)
     """
     if not scraper_ready:
         return jsonify({
@@ -441,30 +458,167 @@ def get_video_url():
             'example': '{"player_url": "https://cnvsweb.stream/watch/123"}'
         }), 400
     
-    player_url = data['player_url']
+    watch_link = data['player_url']  # Na verdade é o watch_link (página do filme)
     
     try:
-        print(f"\n🎥 Buscando link de vídeo para: {player_url}")
+        print(f"\n🎥 Buscando vídeo para: {watch_link}")
         
-        # Usa método do scraper original para extrair vídeo
+        # ETAPA 1: Extrai a URL do player (botão ASSISTIR)
+        print("📍 ETAPA 1: Extraindo URL do player...")
+        player_url = scraper.get_player_url(watch_link)
+        
+        if not player_url:
+            print("✗ Não foi possível encontrar o player")
+            return jsonify({
+                'success': False,
+                'error': 'Botão ASSISTIR ou player não encontrado na página'
+            }), 404
+        
+        print(f"✓ Player encontrado: {player_url[:80]}...")
+        
+        # ETAPA 2: Extrai a URL do vídeo .mp4 do player
+        print("📍 ETAPA 2: Extraindo URL do vídeo...")
         video_url = scraper.get_video_mp4_url(player_url)
         
         if video_url:
-            print(f"✓ Link obtido: {video_url[:80]}...")
+            print(f"✓ Vídeo encontrado: {video_url[:80]}...")
             return jsonify({
                 'success': True,
                 'video_url': video_url,
-                'player_url': player_url
+                'player_url': player_url,
+                'watch_link': watch_link
             })
         else:
             print("✗ Não foi possível extrair URL do vídeo")
             return jsonify({
                 'success': False,
-                'error': 'Não foi possível extrair URL do vídeo'
+                'error': 'URL do vídeo não encontrada no player',
+                'player_url': player_url
             }), 404
             
     except Exception as e:
         print(f"Erro em /api/video-url: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/series-episodes', methods=['POST'])
+def get_series_episodes_with_videos():
+    """
+    📺 ENDPOINT PARA SÉRIES - Busca todos episódios com vídeos
+    Recebe watch_link da série e retorna todos episódios com URLs de vídeo
+    
+    PROCESSO:
+    1. Recebe watch_link da série (ex: /watch/breaking-bad)
+    2. Extrai todos os episódios (get_series_episodes)
+    3. Para cada episódio, extrai player_url e video_url
+    
+    Parâmetros opcionais:
+    - max_episodes: Máximo de episódios a processar (padrão: todos)
+    - get_video_urls: Se deve buscar URLs de vídeo (padrão: true)
+    """
+    if not scraper_ready:
+        return jsonify({
+            'success': False,
+            'error': 'Scraper não está pronto.'
+        }), 503
+    
+    data = request.get_json()
+    if not data or 'watch_link' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Campo "watch_link" obrigatório no body JSON',
+            'example': '{"watch_link": "https://cnvsweb.stream/watch/breaking-bad"}'
+        }), 400
+    
+    watch_link = data['watch_link']
+    max_episodes = data.get('max_episodes', 0)  # 0 = todos
+    get_video_urls = data.get('get_video_urls', True)
+    
+    try:
+        print(f"\n📺 Buscando episódios para: {watch_link}")
+        
+        # ETAPA 1: Extrai lista de episódios
+        print("📍 ETAPA 1: Extraindo lista de episódios...")
+        episodes = scraper.get_series_episodes(watch_link)
+        
+        if not episodes:
+            print("✗ Nenhum episódio encontrado")
+            return jsonify({
+                'success': False,
+                'error': 'Nenhum episódio encontrado para esta série'
+            }), 404
+        
+        print(f"✓ {len(episodes)} episódios encontrados")
+        
+        # Limita episódios se solicitado
+        if max_episodes > 0:
+            episodes = episodes[:max_episodes]
+            print(f"⚠ Limitado a {max_episodes} episódios")
+        
+        # ETAPA 2: Para cada episódio, busca URLs de vídeo (se solicitado)
+        if get_video_urls:
+            print(f"📍 ETAPA 2: Buscando URLs de vídeo para {len(episodes)} episódios...")
+            
+            for idx, episode in enumerate(episodes, 1):
+                try:
+                    ep_watch_link = episode.get('player_url')
+                    
+                    if not ep_watch_link:
+                        print(f"  {idx}. {episode['title']}: ⚠ Sem player_url")
+                        continue
+                    
+                    print(f"  {idx}. {episode['title']}")
+                    
+                    # Sub-etapa 2.1: Pega URL do player do episódio
+                    player_url = scraper.get_player_url(ep_watch_link)
+                    
+                    if player_url:
+                        episode['iframe_player_url'] = player_url
+                        
+                        # Sub-etapa 2.2: Pega URL do vídeo
+                        video_url = scraper.get_video_mp4_url(player_url)
+                        
+                        if video_url:
+                            episode['video_url'] = video_url
+                            print(f"      ✓ Vídeo: {video_url[:60]}...")
+                        else:
+                            print(f"      ⚠ Vídeo não encontrado")
+                    else:
+                        print(f"      ⚠ Player não encontrado")
+                    
+                    # Delay para não sobrecarregar
+                    if idx < len(episodes):
+                        time.sleep(0.3)
+                        
+                except Exception as e:
+                    print(f"  {idx}. {episode['title']}: ✗ Erro: {e}")
+                    continue
+        
+        # Organiza por temporada
+        episodes_by_season = {}
+        for episode in episodes:
+            season_name = episode.get('season', 'Temporada 1')
+            if season_name not in episodes_by_season:
+                episodes_by_season[season_name] = []
+            episodes_by_season[season_name].append(episode)
+        
+        print(f"✓ Processamento completo!")
+        
+        return jsonify({
+            'success': True,
+            'watch_link': watch_link,
+            'total_episodes': len(episodes),
+            'seasons': list(episodes_by_season.keys()),
+            'episodes': episodes,
+            'episodes_by_season': episodes_by_season
+        })
+        
+    except Exception as e:
+        print(f"Erro em /api/series-episodes: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -485,7 +639,8 @@ def not_found(e):
             '/api/catalog (RÁPIDO)',
             '/api/search?q=query',
             '/api/search-fast?q=query (RÁPIDO)',
-            '/api/video-url (POST - SOB DEMANDA)'
+            '/api/video-url (POST - Filmes)',
+            '/api/series-episodes (POST - Séries)'
         ]
     }), 404
 
