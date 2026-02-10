@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Token de acesso (pode vir de variável de ambiente)
-TOKEN = os.environ.get('TOKEN', 'BRL3SY9L')
+TOKEN = os.environ.get('TOKEN', 'G735PKGU')
 
 # Inicializa o scraper globalmente
 scraper = None
@@ -447,7 +447,7 @@ def get_video_url():
         print(f"\n🎥 Buscando link de vídeo para: {player_url}")
         
         # Usa método do scraper original para extrair vídeo
-        video_url = scraper.get_video_url_from_player(player_url)
+        video_url = scraper.get_video_mp4_url(player_url)
         
         if video_url:
             print(f"✓ Link obtido: {video_url[:80]}...")
