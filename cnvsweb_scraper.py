@@ -794,17 +794,33 @@ class CNVSWebScraper:
                             pub_date = text.replace('Publicado:', '').strip()
                     
                     # Botão de assistir - procura dentro da div.buttons
+                    # CORREÇÃO: os botões dos episódios são links 'rounded-circle' com
+                    # href direto para o player (http://www.playcnvs.stream/s/XXXXX)
+                    # Precisamos pegar TODOS os hrefs válidos, não só o primeiro
                     buttons_div = ep.find('div', class_='buttons')
                     player_url = None
                     
                     if buttons_div:
-                        # Procura pelo link <a> com href
-                        watch_link_tag = buttons_div.find('a', href=True)
-                        if watch_link_tag:
-                            player_url = watch_link_tag.get('href')
-                            # Remove o '>' no final se existir (bug do HTML)
-                            if player_url and player_url.endswith('>'):
-                                player_url = player_url[:-1]
+                        # Procura todos os links com href de player externo
+                        all_links = buttons_div.find_all('a', href=True)
+                        for link in all_links:
+                            href = link.get('href', '')
+                            # Remove '>' no final (bug do HTML)
+                            if href.endswith('>'):
+                                href = href[:-1]
+                            # Pega o primeiro href que seja um player externo válido
+                            if href.startswith('http') and ('playcnvs' in href or 'playmycnvs' in href or '/s/' in href):
+                                player_url = href
+                                break
+                        # Fallback: pega o primeiro link com href externo qualquer
+                        if not player_url:
+                            for link in all_links:
+                                href = link.get('href', '')
+                                if href.endswith('>'):
+                                    href = href[:-1]
+                                if href.startswith('http') and 'cnvsweb' not in href:
+                                    player_url = href
+                                    break
                     
                     episode_data = {
                         'episode_id': ep_id,
