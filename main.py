@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Token de acesso (pode vir de variável de ambiente)
-TOKEN = os.environ.get('TOKEN', '6FC7EADC')
+TOKEN = os.environ.get('TOKEN', '8OLWITI0')
 
 # Inicializa o scraper globalmente
 scraper = None
@@ -458,23 +458,39 @@ def get_video_url():
             'example': '{"player_url": "https://cnvsweb.stream/watch/123"}'
         }), 400
     
-    watch_link = data['player_url']  # Na verdade é o watch_link (página do filme)
+    watch_link = data['player_url']  # pode ser watch_link da página OU player_url direto
+
+    # Remove '>' no final se existir (bug do HTML do site)
+    if watch_link.endswith('>'):
+        watch_link = watch_link[:-1]
     
     try:
         print(f"\n🎥 Buscando vídeo para: {watch_link}")
         
-        # ETAPA 1: Extrai a URL do player (botão ASSISTIR)
-        print("📍 ETAPA 1: Extraindo URL do player...")
-        player_url = scraper.get_player_url(watch_link)
+        # CORREÇÃO: se já é um link de player direto (playcnvs.stream/s/...)
+        # pula o get_player_url e vai direto para get_video_mp4_url
+        is_direct_player = (
+            'playcnvs.stream' in watch_link or
+            'playmycnvs' in watch_link or
+            ('/s/' in watch_link and 'cnvsweb' not in watch_link)
+        )
         
-        if not player_url:
-            print("✗ Não foi possível encontrar o player")
-            return jsonify({
-                'success': False,
-                'error': 'Botão ASSISTIR ou player não encontrado na página'
-            }), 404
-        
-        print(f"✓ Player encontrado: {player_url[:80]}...")
+        if is_direct_player:
+            print("📍 Link de player direto detectado — extraindo vídeo diretamente...")
+            player_url = watch_link
+        else:
+            # É uma página do cnvsweb → precisa extrair o player primeiro
+            print("📍 ETAPA 1: Extraindo URL do player a partir da página...")
+            player_url = scraper.get_player_url(watch_link)
+            
+            if not player_url:
+                print("✗ Não foi possível encontrar o player")
+                return jsonify({
+                    'success': False,
+                    'error': 'Botão ASSISTIR ou player não encontrado na página'
+                }), 404
+            
+            print(f"✓ Player encontrado: {player_url[:80]}...")
         
         # ETAPA 2: Extrai a URL do vídeo .mp4 do player
         print("📍 ETAPA 2: Extraindo URL do vídeo...")
@@ -560,39 +576,40 @@ def get_series_episodes_with_videos():
             print(f"⚠ Limitado a {max_episodes} episódios")
         
         # ETAPA 2: Para cada episódio, busca URLs de vídeo (se solicitado)
+        # CORREÇÃO: o campo player_url do episódio JÁ É a URL do player (playcnvs.stream/s/...)
+        # NÃO precisa passar por get_player_url() — isso causava o erro porque tentava
+        # fazer scraping de uma âncora #ep-1 que não tem iframe no HTML estático.
+        # Basta chamar get_video_mp4_url() diretamente com o player_url do episódio.
         if get_video_urls:
             print(f"📍 ETAPA 2: Buscando URLs de vídeo para {len(episodes)} episódios...")
             
             for idx, episode in enumerate(episodes, 1):
                 try:
-                    ep_watch_link = episode.get('player_url')
+                    ep_player_url = episode.get('player_url')
                     
-                    if not ep_watch_link:
+                    if not ep_player_url:
                         print(f"  {idx}. {episode['title']}: ⚠ Sem player_url")
                         continue
                     
-                    print(f"  {idx}. {episode['title']}")
+                    # Remove '>' no final se existir (bug do HTML do site)
+                    if ep_player_url.endswith('>'):
+                        ep_player_url = ep_player_url[:-1]
+                        episode['player_url'] = ep_player_url
                     
-                    # Sub-etapa 2.1: Pega URL do player do episódio
-                    player_url = scraper.get_player_url(ep_watch_link)
+                    print(f"  {idx}. {episode['title']} → {ep_player_url[:60]}...")
                     
-                    if player_url:
-                        episode['iframe_player_url'] = player_url
-                        
-                        # Sub-etapa 2.2: Pega URL do vídeo
-                        video_url = scraper.get_video_mp4_url(player_url)
-                        
-                        if video_url:
-                            episode['video_url'] = video_url
-                            print(f"      ✓ Vídeo: {video_url[:60]}...")
-                        else:
-                            print(f"      ⚠ Vídeo não encontrado")
+                    # DIRETO: player_url já é o link do player, não precisa de scraping extra
+                    video_url = scraper.get_video_mp4_url(ep_player_url)
+                    
+                    if video_url:
+                        episode['video_url'] = video_url
+                        print(f"      ✓ Vídeo: {video_url[:60]}...")
                     else:
-                        print(f"      ⚠ Player não encontrado")
+                        print(f"      ⚠ Vídeo não encontrado para este episódio")
                     
-                    # Delay para não sobrecarregar
+                    # Delay para não sobrecarregar o servidor
                     if idx < len(episodes):
-                        time.sleep(0.3)
+                        time.sleep(0.5)
                         
                 except Exception as e:
                     print(f"  {idx}. {episode['title']}: ✗ Erro: {e}")
