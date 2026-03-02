@@ -721,119 +721,140 @@ class CNVSWebScraper:
             return None
     
     def get_series_episodes(self, watch_link):
-        """Extrai todos os episódios de todas as temporadas de uma série"""
+        """Retorna apenas a lista de temporadas de uma série (sem episódios)"""
         self.keep_alive()
-        
+
         try:
             if not watch_link.startswith('http'):
                 watch_link = urljoin(self.base_url, watch_link)
-            
+
             print(f"       📺 Acessando página da série: {watch_link}")
             response = self.session.get(watch_link)
             self.last_activity = time.time()
             soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Procura o select de temporadas
+
             seasons_select = soup.find('select', id='seasons-view')
-            
             if not seasons_select:
                 print(f"       ⚠ Select de temporadas não encontrado")
                 return []
-            
-            # Pega todas as temporadas
+
             seasons = seasons_select.find_all('option')
             print(f"       📊 Encontradas {len(seasons)} temporadas")
-            
-            all_episodes = []
 
-            # Pega episódios direto do HTML da página (temporada selecionada)
-            selected_season = seasons_select.find('option', selected=True) or (seasons[0] if seasons else None)
-            season_name = selected_season.get_text(strip=True) if selected_season else "Temporada 1"
-            season_id = selected_season.get('value', '') if selected_season else ''
+            seasons_list = []
+            for opt in seasons:
+                season_id = opt.get('value', '')
+                season_name = opt.get_text(strip=True)
+                is_selected = opt.get('selected') is not None
+                if season_id:
+                    seasons_list.append({
+                        'season_id': season_id,
+                        'season_name': season_name,
+                        'selected': is_selected
+                    })
+
+            return seasons_list
+
+        except Exception as e:
+            print(f"       ✗ Erro ao extrair temporadas: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    def get_season_episodes(self, watch_link, season_id):
+        """Retorna episódios de uma temporada específica acessando a página com o season_id"""
+        self.keep_alive()
+
+        try:
+            if not watch_link.startswith('http'):
+                watch_link = urljoin(self.base_url, watch_link)
+
+            # Acessa a página da temporada específica
+            season_url = f"{watch_link}?season={season_id}"
+            print(f"       📺 Acessando temporada: {season_url}")
+            response = self.session.get(season_url)
+            self.last_activity = time.time()
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            # Pega o nome da temporada pelo select
+            seasons_select = soup.find('select', id='seasons-view')
+            season_name = f"Temporada {season_id}"
+            if seasons_select:
+                for opt in seasons_select.find_all('option'):
+                    if opt.get('value', '') == str(season_id):
+                        season_name = opt.get_text(strip=True)
+                        break
 
             episodes_container = soup.find('div', id='episodes-view')
             episodes = episodes_container.find_all('div', class_='ep') if episodes_container else []
-
             print(f"       📊 Encontrados {len(episodes)} episódios na {season_name}")
 
-            # Bloco de iteração único para os episódios encontrados
-            if True:
-                season_option = selected_season
+            all_episodes = []
+            for idx, ep in enumerate(episodes, 1):
+                try:
+                    ep_id = ep.get('id', '')
+                    info_div = ep.find('div', class_='info')
+                    if not info_div:
+                        continue
 
-                for idx, ep in enumerate(episodes, 1):
-                    try:
-                        # ID do episódio
-                        ep_id = ep.get('id', '')
-                        
-                        # Informações do episódio
-                        info_div = ep.find('div', class_='info')
-                        
-                        if not info_div:
-                            continue
-                        
-                        # Título do episódio
-                        title_tag = info_div.find('h5', class_='fw-bold')
-                        ep_title = title_tag.get_text(strip=True) if title_tag else f"Episódio {idx}"
-                        
-                        # Duração
-                        duration_tags = info_div.find_all('p', class_='small')
-                        duration = "N/A"
-                        pub_date = "N/A"
-                        
-                        for tag in duration_tags:
-                            text = tag.get_text(strip=True)
-                            if 'Duração:' in text:
-                                duration = text.replace('Duração:', '').strip()
-                            elif 'Publicado:' in text:
-                                pub_date = text.replace('Publicado:', '').strip()
-                        
-                        # Botão de assistir - procura dentro da div.buttons
-                        buttons_div = ep.find('div', class_='buttons')
-                        player_url = None
-                        
-                        if buttons_div:
-                            all_links = buttons_div.find_all('a', href=True)
+                    title_tag = info_div.find('h5', class_='fw-bold')
+                    ep_title = title_tag.get_text(strip=True) if title_tag else f"Episódio {idx}"
+
+                    duration_tags = info_div.find_all('p', class_='small')
+                    duration = "N/A"
+                    pub_date = "N/A"
+                    for tag in duration_tags:
+                        text = tag.get_text(strip=True)
+                        if 'Duração:' in text:
+                            duration = text.replace('Duração:', '').strip()
+                        elif 'Publicado:' in text:
+                            pub_date = text.replace('Publicado:', '').strip()
+
+                    buttons_div = ep.find('div', class_='buttons')
+                    player_url = None
+                    if buttons_div:
+                        all_links = buttons_div.find_all('a', href=True)
+                        for link in all_links:
+                            href = link.get('href', '')
+                            if href.endswith('>'):
+                                href = href[:-1]
+                            if href.startswith('http') and ('playcnvs' in href or 'playmycnvs' in href or '/s/' in href):
+                                player_url = href
+                                break
+                        if not player_url:
                             for link in all_links:
                                 href = link.get('href', '')
                                 if href.endswith('>'):
                                     href = href[:-1]
-                                if href.startswith('http') and ('playcnvs' in href or 'playmycnvs' in href or '/s/' in href):
+                                if href.startswith('http') and 'cnvsweb' not in href:
                                     player_url = href
                                     break
-                            if not player_url:
-                                for link in all_links:
-                                    href = link.get('href', '')
-                                    if href.endswith('>'):
-                                        href = href[:-1]
-                                    if href.startswith('http') and 'cnvsweb' not in href:
-                                        player_url = href
-                                        break
-                        
-                        episode_data = {
-                            'episode_id': ep_id,
-                            'season': season_name,
-                            'season_id': season_id,
-                            'title': ep_title,
-                            'duration': duration,
-                            'published_date': pub_date,
-                            'player_url': player_url,
-                            'video_url': None
-                        }
-                        
-                        if player_url:
-                            print(f"             {idx}. {ep_title}: {player_url[:60]}...")
-                        else:
-                            print(f"             {idx}. {ep_title}: ⚠ sem player_url")
-                        
-                        all_episodes.append(episode_data)
-                        
-                    except Exception as e:
-                        print(f"             ✗ Erro ao processar episódio {idx}: {e}")
-                        continue
-            
+
+                    episode_data = {
+                        'episode_id': ep_id,
+                        'season': season_name,
+                        'season_id': season_id,
+                        'title': ep_title,
+                        'duration': duration,
+                        'published_date': pub_date,
+                        'player_url': player_url,
+                        'video_url': None
+                    }
+
+                    if player_url:
+                        print(f"             {idx}. {ep_title}: {player_url[:60]}...")
+                    else:
+                        print(f"             {idx}. {ep_title}: ⚠ sem player_url")
+
+                    all_episodes.append(episode_data)
+
+                except Exception as e:
+                    print(f"             ✗ Erro ao processar episódio {idx}: {e}")
+                    continue
+
             print(f"       ✓ Total de episódios extraídos: {len(all_episodes)}")
             return all_episodes
-            
+
         except Exception as e:
             print(f"       ✗ Erro ao extrair episódios: {e}")
             import traceback
