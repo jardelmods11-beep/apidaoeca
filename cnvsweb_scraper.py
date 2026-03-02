@@ -762,22 +762,18 @@ class CNVSWebScraper:
             return []
 
     def get_season_episodes(self, watch_link, season_id):
-        """Retorna episódios de uma temporada específica acessando a página com o season_id"""
+        """Retorna episódios de uma temporada específica via AJAX autenticado"""
         self.keep_alive()
 
         try:
             if not watch_link.startswith('http'):
                 watch_link = urljoin(self.base_url, watch_link)
 
-            # Acessa a página da temporada específica
-            season_url = f"{watch_link}?season={season_id}"
-            print(f"       📺 Acessando temporada: {season_url}")
-            response = self.session.get(season_url)
-            self.last_activity = time.time()
-            soup = BeautifulSoup(response.content, 'html.parser')
-
-            # Pega o nome da temporada pelo select
-            seasons_select = soup.find('select', id='seasons-view')
+            # Pega nome da temporada acessando a página principal
+            print(f"       📺 Buscando temporada {season_id} de: {watch_link}")
+            page_response = self.session.get(watch_link)
+            page_soup = BeautifulSoup(page_response.content, 'html.parser')
+            seasons_select = page_soup.find('select', id='seasons-view')
             season_name = f"Temporada {season_id}"
             if seasons_select:
                 for opt in seasons_select.find_all('option'):
@@ -785,8 +781,33 @@ class CNVSWebScraper:
                         season_name = opt.get_text(strip=True)
                         break
 
-            episodes_container = soup.find('div', id='episodes-view')
-            episodes = episodes_container.find_all('div', class_='ep') if episodes_container else []
+            # Faz AJAX autenticado igual ao browser faz ao trocar de temporada
+            ajax_url = f"{self.base_url}/ajax/episodes.php"
+            ajax_headers = {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': '*/*',
+                'Origin': self.base_url,
+                'Referer': watch_link,
+            }
+            ajax_response = self.session.post(
+                ajax_url,
+                data={'season': str(season_id)},
+                headers=ajax_headers,
+                timeout=self.timeout
+            )
+            self.last_activity = time.time()
+
+            print(f"       🔍 AJAX status={ajax_response.status_code} len={len(ajax_response.text)}")
+
+            ajax_soup = BeautifulSoup(ajax_response.content, 'html.parser')
+            episodes = ajax_soup.find_all('div', class_='ep')
+
+            # Fallback: se AJAX não retornou nada, usa os da página principal (só funciona para T1)
+            if not episodes:
+                print(f"       ⚠ AJAX vazio, tentando página principal...")
+                ep_container = page_soup.find('div', id='episodes-view')
+                episodes = ep_container.find_all('div', class_='ep') if ep_container else []
             print(f"       📊 Encontrados {len(episodes)} episódios na {season_name}")
 
             all_episodes = []
