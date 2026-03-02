@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Token de acesso (pode vir de variável de ambiente)
-TOKEN = os.environ.get('TOKEN', '53NIA2HS')
+TOKEN = os.environ.get('TOKEN', '9UABIG8V')
 
 # Inicializa o scraper globalmente
 scraper = None
@@ -559,79 +559,23 @@ def get_series_episodes_with_videos():
         
         # ETAPA 1: Extrai lista de episódios
         print("📍 ETAPA 1: Extraindo lista de episódios...")
-        episodes = scraper.get_series_episodes(watch_link)
-        
-        if not episodes:
-            print("✗ Nenhum episódio encontrado")
+        seasons = scraper.get_series_episodes(watch_link)
+
+        if not seasons:
+            print("✗ Nenhuma temporada encontrada")
             return jsonify({
                 'success': False,
-                'error': 'Nenhum episódio encontrado para esta série'
+                'error': 'Nenhuma temporada encontrada para esta série'
             }), 404
-        
-        print(f"✓ {len(episodes)} episódios encontrados")
-        
-        # Limita episódios se solicitado
-        if max_episodes > 0:
-            episodes = episodes[:max_episodes]
-            print(f"⚠ Limitado a {max_episodes} episódios")
-        
-        # ETAPA 2: Para cada episódio, busca URLs de vídeo (se solicitado)
-        # CORREÇÃO: o campo player_url do episódio JÁ É a URL do player (playcnvs.stream/s/...)
-        # NÃO precisa passar por get_player_url() — isso causava o erro porque tentava
-        # fazer scraping de uma âncora #ep-1 que não tem iframe no HTML estático.
-        # Basta chamar get_video_mp4_url() diretamente com o player_url do episódio.
-        if get_video_urls:
-            print(f"📍 ETAPA 2: Buscando URLs de vídeo para {len(episodes)} episódios...")
-            
-            for idx, episode in enumerate(episodes, 1):
-                try:
-                    ep_player_url = episode.get('player_url')
-                    
-                    if not ep_player_url:
-                        print(f"  {idx}. {episode['title']}: ⚠ Sem player_url")
-                        continue
-                    
-                    # Remove '>' no final se existir (bug do HTML do site)
-                    if ep_player_url.endswith('>'):
-                        ep_player_url = ep_player_url[:-1]
-                        episode['player_url'] = ep_player_url
-                    
-                    print(f"  {idx}. {episode['title']} → {ep_player_url[:60]}...")
-                    
-                    # DIRETO: player_url já é o link do player, não precisa de scraping extra
-                    video_url = scraper.get_video_mp4_url(ep_player_url)
-                    
-                    if video_url:
-                        episode['video_url'] = video_url
-                        print(f"      ✓ Vídeo: {video_url[:60]}...")
-                    else:
-                        print(f"      ⚠ Vídeo não encontrado para este episódio")
-                    
-                    # Delay para não sobrecarregar o servidor
-                    if idx < len(episodes):
-                        time.sleep(0.5)
-                        
-                except Exception as e:
-                    print(f"  {idx}. {episode['title']}: ✗ Erro: {e}")
-                    continue
-        
-        # Organiza por temporada
-        episodes_by_season = {}
-        for episode in episodes:
-            season_name = episode.get('season', 'Temporada 1')
-            if season_name not in episodes_by_season:
-                episodes_by_season[season_name] = []
-            episodes_by_season[season_name].append(episode)
-        
-        print(f"✓ Processamento completo!")
-        
+
+        print(f"✓ {len(seasons)} temporadas encontradas")
+
         return jsonify({
             'success': True,
             'watch_link': watch_link,
-            'total_episodes': len(episodes),
-            'seasons': list(episodes_by_season.keys()),
-            'episodes': episodes,
-            'episodes_by_season': episodes_by_season
+            'total_seasons': len(seasons),
+            'seasons': seasons,
+            'note': 'Use /api/season-episodes com o season_id para buscar os episódios de cada temporada'
         })
         
     except Exception as e:
@@ -642,6 +586,73 @@ def get_series_episodes_with_videos():
             'success': False,
             'error': str(e)
         }), 500
+
+
+@app.route('/api/season-episodes', methods=['POST'])
+def get_season_episodes():
+    """
+    📺 Retorna episódios de uma temporada específica
+    
+    Body JSON:
+    - watch_link: URL da série (ex: https://cnvsweb.stream/watch/grey-s-anatomy)
+    - season_id: ID da temporada (obtido via /api/series-episodes)
+    - get_video_urls: Opcional - buscar URLs de vídeo (padrão: false)
+    """
+    if not scraper_ready:
+        return jsonify({'success': False, 'error': 'Scraper não está pronto.'}), 503
+
+    data = request.get_json()
+    if not data or 'watch_link' not in data or 'season_id' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Campos "watch_link" e "season_id" são obrigatórios',
+            'example': '{"watch_link": "https://cnvsweb.stream/watch/grey-s-anatomy", "season_id": "7830"}'
+        }), 400
+
+    watch_link = data['watch_link']
+    season_id = str(data['season_id'])
+    get_video_urls = data.get('get_video_urls', False)
+
+    try:
+        print(f"\n📺 Buscando episódios da temporada {season_id} de: {watch_link}")
+
+        episodes = scraper.get_season_episodes(watch_link, season_id)
+
+        if not episodes:
+            return jsonify({'success': False, 'error': 'Nenhum episódio encontrado para esta temporada'}), 404
+
+        if get_video_urls:
+            print(f"📍 Buscando URLs de vídeo para {len(episodes)} episódios...")
+            for idx, episode in enumerate(episodes, 1):
+                try:
+                    ep_player_url = episode.get('player_url')
+                    if not ep_player_url:
+                        continue
+                    if ep_player_url.endswith('>'):
+                        ep_player_url = ep_player_url[:-1]
+                        episode['player_url'] = ep_player_url
+                    video_url = scraper.get_video_mp4_url(ep_player_url)
+                    if video_url:
+                        episode['video_url'] = video_url
+                    if idx < len(episodes):
+                        time.sleep(0.5)
+                except Exception as e:
+                    print(f"  Erro no episódio {idx}: {e}")
+                    continue
+
+        return jsonify({
+            'success': True,
+            'watch_link': watch_link,
+            'season_id': season_id,
+            'total_episodes': len(episodes),
+            'episodes': episodes
+        })
+
+    except Exception as e:
+        print(f"Erro em /api/season-episodes: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # Tratamento de erros 404
 @app.errorhandler(404)
