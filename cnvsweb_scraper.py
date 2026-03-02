@@ -746,50 +746,19 @@ class CNVSWebScraper:
             
             all_episodes = []
 
-            # Itera por TODAS as temporadas fazendo requisição AJAX para cada uma
-            for season_option in seasons:
-                season_id = season_option.get('value', '')
-                season_name = season_option.get_text(strip=True)
+            # Pega episódios direto do HTML da página (temporada selecionada)
+            selected_season = seasons_select.find('option', selected=True) or (seasons[0] if seasons else None)
+            season_name = selected_season.get_text(strip=True) if selected_season else "Temporada 1"
+            season_id = selected_season.get('value', '') if selected_season else ''
 
-                if not season_id:
-                    continue
+            episodes_container = soup.find('div', id='episodes-view')
+            episodes = episodes_container.find_all('div', class_='ep') if episodes_container else []
 
-                print(f"       🎬 Buscando episódios da {season_name} (id={season_id})...")
+            print(f"       📊 Encontrados {len(episodes)} episódios na {season_name}")
 
-                # Requisição AJAX para carregar episódios da temporada
-                ajax_url = f"{self.base_url}/ajax/episodes.php"
-                ajax_headers = {
-                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Accept': 'application/json, text/javascript, */*; q=0.01',
-                    'Origin': self.base_url,
-                    'Referer': watch_link
-                }
-                ajax_payload = {'season': season_id}
-
-                try:
-                    ajax_response = self.session.post(
-                        ajax_url,
-                        data=ajax_payload,
-                        headers=ajax_headers,
-                        timeout=self.timeout
-                    )
-                    season_soup = BeautifulSoup(ajax_response.content, 'html.parser')
-                    episodes_container = season_soup.find('div', id='episodes-view') or season_soup
-                    episodes = episodes_container.find_all('div', class_='ep')
-                    if not episodes:
-                        # Tenta parsear direto o HTML retornado (pode ser fragmento)
-                        episodes = season_soup.find_all('div', class_='ep')
-                except Exception as e:
-                    print(f"       ⚠ Erro ao buscar {season_name} via AJAX: {e}")
-                    # Fallback: usa episódios já carregados na página se for temporada selecionada
-                    if season_option.get('selected'):
-                        episodes_container = soup.find('div', id='episodes-view')
-                        episodes = episodes_container.find_all('div', class_='ep') if episodes_container else []
-                    else:
-                        episodes = []
-
-                print(f"       📊 Encontrados {len(episodes)} episódios na {season_name}")
+            # Bloco de iteração único para os episódios encontrados
+            if True:
+                season_option = selected_season
 
                 for idx, ep in enumerate(episodes, 1):
                     try:
