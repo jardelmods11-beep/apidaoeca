@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Token de acesso (pode vir de variável de ambiente)
-TOKEN = os.environ.get('TOKEN', 'G4DAWX5R')
+TOKEN = os.environ.get('TOKEN', '53NIA2HS')
 
 # Inicializa o scraper globalmente
 scraper = None
