@@ -745,104 +745,122 @@ class CNVSWebScraper:
             print(f"       📊 Encontradas {len(seasons)} temporadas")
             
             all_episodes = []
-            
-            # NOTA: Por enquanto, vamos extrair apenas os episódios da temporada ATUAL
-            # (a que está visível na página)
-            # Para extrair TODAS as temporadas, seria necessário fazer requisições AJAX
-            # ou usar Selenium
-            
-            episodes_container = soup.find('div', id='episodes-view')
-            
-            if not episodes_container:
-                print(f"       ⚠ Container de episódios não encontrado")
-                return []
-            
-            # Encontra todos os episódios
-            episodes = episodes_container.find_all('div', class_='ep')
-            print(f"       📊 Encontrados {len(episodes)} episódios na temporada atual")
-            
-            # Identifica qual temporada está selecionada
-            selected_season = seasons_select.find('option', selected=True)
-            season_name = selected_season.get_text(strip=True) if selected_season else "Temporada 1"
-            season_id = selected_season.get('value') if selected_season else "unknown"
-            
-            for idx, ep in enumerate(episodes, 1):
+
+            # Itera por TODAS as temporadas fazendo requisição AJAX para cada uma
+            for season_option in seasons:
+                season_id = season_option.get('value', '')
+                season_name = season_option.get_text(strip=True)
+
+                if not season_id:
+                    continue
+
+                print(f"       🎬 Buscando episódios da {season_name} (id={season_id})...")
+
+                # Requisição AJAX para carregar episódios da temporada
+                ajax_url = f"{self.base_url}/ajax/episodes.php"
+                ajax_headers = {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json, text/javascript, */*; q=0.01',
+                    'Origin': self.base_url,
+                    'Referer': watch_link
+                }
+                ajax_payload = {'season': season_id}
+
                 try:
-                    # ID do episódio
-                    ep_id = ep.get('id', '')
-                    
-                    # Informações do episódio
-                    info_div = ep.find('div', class_='info')
-                    
-                    if not info_div:
-                        continue
-                    
-                    # Título do episódio
-                    title_tag = info_div.find('h5', class_='fw-bold')
-                    ep_title = title_tag.get_text(strip=True) if title_tag else f"Episódio {idx}"
-                    
-                    # Duração
-                    duration_tags = info_div.find_all('p', class_='small')
-                    duration = "N/A"
-                    pub_date = "N/A"
-                    
-                    for tag in duration_tags:
-                        text = tag.get_text(strip=True)
-                        if 'Duração:' in text:
-                            duration = text.replace('Duração:', '').strip()
-                        elif 'Publicado:' in text:
-                            pub_date = text.replace('Publicado:', '').strip()
-                    
-                    # Botão de assistir - procura dentro da div.buttons
-                    # CORREÇÃO: os botões dos episódios são links 'rounded-circle' com
-                    # href direto para o player (http://www.playcnvs.stream/s/XXXXX)
-                    # Precisamos pegar TODOS os hrefs válidos, não só o primeiro
-                    buttons_div = ep.find('div', class_='buttons')
-                    player_url = None
-                    
-                    if buttons_div:
-                        # Procura todos os links com href de player externo
-                        all_links = buttons_div.find_all('a', href=True)
-                        for link in all_links:
-                            href = link.get('href', '')
-                            # Remove '>' no final (bug do HTML)
-                            if href.endswith('>'):
-                                href = href[:-1]
-                            # Pega o primeiro href que seja um player externo válido
-                            if href.startswith('http') and ('playcnvs' in href or 'playmycnvs' in href or '/s/' in href):
-                                player_url = href
-                                break
-                        # Fallback: pega o primeiro link com href externo qualquer
-                        if not player_url:
+                    ajax_response = self.session.post(
+                        ajax_url,
+                        data=ajax_payload,
+                        headers=ajax_headers,
+                        timeout=self.timeout
+                    )
+                    season_soup = BeautifulSoup(ajax_response.content, 'html.parser')
+                    episodes_container = season_soup.find('div', id='episodes-view') or season_soup
+                    episodes = episodes_container.find_all('div', class_='ep')
+                    if not episodes:
+                        # Tenta parsear direto o HTML retornado (pode ser fragmento)
+                        episodes = season_soup.find_all('div', class_='ep')
+                except Exception as e:
+                    print(f"       ⚠ Erro ao buscar {season_name} via AJAX: {e}")
+                    # Fallback: usa episódios já carregados na página se for temporada selecionada
+                    if season_option.get('selected'):
+                        episodes_container = soup.find('div', id='episodes-view')
+                        episodes = episodes_container.find_all('div', class_='ep') if episodes_container else []
+                    else:
+                        episodes = []
+
+                print(f"       📊 Encontrados {len(episodes)} episódios na {season_name}")
+
+                for idx, ep in enumerate(episodes, 1):
+                    try:
+                        # ID do episódio
+                        ep_id = ep.get('id', '')
+                        
+                        # Informações do episódio
+                        info_div = ep.find('div', class_='info')
+                        
+                        if not info_div:
+                            continue
+                        
+                        # Título do episódio
+                        title_tag = info_div.find('h5', class_='fw-bold')
+                        ep_title = title_tag.get_text(strip=True) if title_tag else f"Episódio {idx}"
+                        
+                        # Duração
+                        duration_tags = info_div.find_all('p', class_='small')
+                        duration = "N/A"
+                        pub_date = "N/A"
+                        
+                        for tag in duration_tags:
+                            text = tag.get_text(strip=True)
+                            if 'Duração:' in text:
+                                duration = text.replace('Duração:', '').strip()
+                            elif 'Publicado:' in text:
+                                pub_date = text.replace('Publicado:', '').strip()
+                        
+                        # Botão de assistir - procura dentro da div.buttons
+                        buttons_div = ep.find('div', class_='buttons')
+                        player_url = None
+                        
+                        if buttons_div:
+                            all_links = buttons_div.find_all('a', href=True)
                             for link in all_links:
                                 href = link.get('href', '')
                                 if href.endswith('>'):
                                     href = href[:-1]
-                                if href.startswith('http') and 'cnvsweb' not in href:
+                                if href.startswith('http') and ('playcnvs' in href or 'playmycnvs' in href or '/s/' in href):
                                     player_url = href
                                     break
-                    
-                    episode_data = {
-                        'episode_id': ep_id,
-                        'season': season_name,
-                        'season_id': season_id,
-                        'title': ep_title,
-                        'duration': duration,
-                        'published_date': pub_date,
-                        'player_url': player_url,
-                        'video_url': None
-                    }
-                    
-                    if player_url:
-                        print(f"             {idx}. {ep_title}: {player_url[:60]}...")
-                    else:
-                        print(f"             {idx}. {ep_title}: ⚠ sem player_url")
-                    
-                    all_episodes.append(episode_data)
-                    
-                except Exception as e:
-                    print(f"             ✗ Erro ao processar episódio {idx}: {e}")
-                    continue
+                            if not player_url:
+                                for link in all_links:
+                                    href = link.get('href', '')
+                                    if href.endswith('>'):
+                                        href = href[:-1]
+                                    if href.startswith('http') and 'cnvsweb' not in href:
+                                        player_url = href
+                                        break
+                        
+                        episode_data = {
+                            'episode_id': ep_id,
+                            'season': season_name,
+                            'season_id': season_id,
+                            'title': ep_title,
+                            'duration': duration,
+                            'published_date': pub_date,
+                            'player_url': player_url,
+                            'video_url': None
+                        }
+                        
+                        if player_url:
+                            print(f"             {idx}. {ep_title}: {player_url[:60]}...")
+                        else:
+                            print(f"             {idx}. {ep_title}: ⚠ sem player_url")
+                        
+                        all_episodes.append(episode_data)
+                        
+                    except Exception as e:
+                        print(f"             ✗ Erro ao processar episódio {idx}: {e}")
+                        continue
             
             print(f"       ✓ Total de episódios extraídos: {len(all_episodes)}")
             return all_episodes
