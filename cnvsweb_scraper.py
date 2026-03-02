@@ -781,31 +781,43 @@ class CNVSWebScraper:
                         season_name = opt.get_text(strip=True)
                         break
 
-            # Faz AJAX autenticado igual ao browser faz ao trocar de temporada
+            # Faz AJAX igual ao browser: GET com season, page e timestamp
+            import time as _time
+            timestamp = int(_time.time() * 1000)
             ajax_url = f"{self.base_url}/ajax/episodes.php"
+            ajax_params = {
+                'season': str(season_id),
+                'page': '1',
+                '_': str(timestamp)
+            }
             ajax_headers = {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                 'X-Requested-With': 'XMLHttpRequest',
                 'Accept': '*/*',
-                'Origin': self.base_url,
                 'Referer': watch_link,
             }
-            ajax_response = self.session.post(
+            ajax_response = self.session.get(
                 ajax_url,
-                data={'season': str(season_id)},
+                params=ajax_params,
                 headers=ajax_headers,
                 timeout=self.timeout
             )
             self.last_activity = time.time()
 
-            print(f"       🔍 AJAX status={ajax_response.status_code} len={len(ajax_response.text)}")
+            print(f"       🔍 AJAX status={ajax_response.status_code} len={len(ajax_response.text)} url={ajax_response.url}")
+            print(f"       🍪 Cookies da sessão: {list(self.session.cookies.keys())}")
 
             ajax_soup = BeautifulSoup(ajax_response.content, 'html.parser')
-            episodes = ajax_soup.find_all('div', class_='ep')
 
-            # Fallback: se AJAX não retornou nada, usa os da página principal (só funciona para T1)
+            # O AJAX retorna um <div id="episodes-view"> ou direto as <div class="ep">
+            ep_container = ajax_soup.find('div', id='episodes-view')
+            if ep_container:
+                episodes = ep_container.find_all('div', class_='ep')
+            else:
+                episodes = ajax_soup.find_all('div', class_='ep')
+
+            # Fallback: se AJAX vazio, usa os da página principal (só T1)
             if not episodes:
-                print(f"       ⚠ AJAX vazio, tentando página principal...")
+                print(f"       ⚠ AJAX vazio, usando página principal...")
                 ep_container = page_soup.find('div', id='episodes-view')
                 episodes = ep_container.find_all('div', class_='ep') if ep_container else []
             print(f"       📊 Encontrados {len(episodes)} episódios na {season_name}")
@@ -831,8 +843,10 @@ class CNVSWebScraper:
                         elif 'Publicado:' in text:
                             pub_date = text.replace('Publicado:', '').strip()
 
-                    buttons_div = ep.find('div', class_='buttons')
                     player_url = None
+
+                    # Método 1: link direto <a href="http://playcnvs...">
+                    buttons_div = ep.find('div', class_='buttons')
                     if buttons_div:
                         all_links = buttons_div.find_all('a', href=True)
                         for link in all_links:
@@ -850,6 +864,26 @@ class CNVSWebScraper:
                                 if href.startswith('http') and 'cnvsweb' not in href:
                                     player_url = href
                                     break
+
+                    # Método 2: extrai do loadEpisode(season_id, player_id) nos comentários HTML
+                    if not player_url:
+                        import re
+                        ep_html = str(ep)
+                        match = re.search(r'loadEpisode\(\s*\d+\s*,\s*(\d+)\s*\)', ep_html)
+                        if match:
+                            player_id = match.group(1)
+                            player_url = f"http://www.playcnvs.stream/s/{player_id}"
+
+                    # Método 3: procura data-id ou onclick com ID numérico
+                    if not player_url:
+                        for tag in ep.find_all(True):
+                            for attr in ['data-id', 'data-player', 'data-episode']:
+                                val = tag.get(attr, '')
+                                if val and val.isdigit():
+                                    player_url = f"http://www.playcnvs.stream/s/{val}"
+                                    break
+                            if player_url:
+                                break
 
                     episode_data = {
                         'episode_id': ep_id,
