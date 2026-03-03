@@ -1,6 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from cnvsweb_scraper import CNVSWebScraper
+from cnvsweb_scraper import CNVSWebScraper, scrape_all_catalog
 import threading
 import time
 import os
@@ -9,7 +9,7 @@ app = Flask(__name__)
 CORS(app)
 
 # Token de acesso (pode vir de variável de ambiente)
-TOKEN = os.environ.get('TOKEN', 'CZQ1W54F')
+TOKEN = os.environ.get('TOKEN', 'HF2MXRZU')
 
 # Inicializa o scraper globalmente
 scraper = None
@@ -80,12 +80,12 @@ def home():
             'catalog_fast': {
                 'url': '/api/catalog',
                 'method': 'GET',
-                'description': '⚡ RÁPIDO - Lista catálogo SEM links de vídeo (< 1s)',
+                'description': '⚡ RÁPIDO - Lista catálogo SEM links de vídeo. Scraping de /movies, /tvseries e /animes',
                 'params': {
-                    'limit': 'Opcional - Número máximo de resultados',
-                    'type': 'Opcional - movie/series/all (padrão: all)'
+                    'limit': 'Opcional - Número máximo de resultados (padrão: sem limite)',
+                    'type': 'Opcional - movie/series/anime/all (padrão: all)'
                 },
-                'example': '/api/catalog?limit=50&type=movie'
+                'example': '/api/catalog?type=movie'
             },
             'search': {
                 'url': '/api/search?q=query',
@@ -360,77 +360,56 @@ def search_fast():
 @app.route('/api/catalog')
 def catalog():
     """
-    ⚡ ENDPOINT ULTRA RÁPIDO
-    Retorna catálogo SEM buscar links de vídeo
-    Perfeito para carregamento inicial de apps
+    ENDPOINT ULTRA RAPIDO - Sem necessidade de login
+    Faz scraping direto das paginas:
+      - cnvsweb.stream/movies   -> type=movie  (Queridinhos do BLUECINE)
+      - cnvsweb.stream/tvseries -> type=series (Queridinhos do BLUECINE)
+      - cnvsweb.stream/animes   -> type=anime
+    Retorna TODOS os itens sem limite por padrao.
     """
-    if not scraper_ready:
-        return jsonify({
-            'success': False,
-            'error': 'Scraper ainda está inicializando.'
-        }), 503
-    
     try:
         limit = request.args.get('limit', type=int)
         content_type = request.args.get('type', default='all', type=str)
-        
-        print("\n⚡ Carregando catálogo rápido...")
-        
-        # Usa get_most_watched_today SEM buscar URLs de vídeo
-        result = scraper.get_most_watched_today(
-            get_video_urls=False,  # RÁPIDO: não busca links
-            max_episodes_per_series=0,
-            organize_output=True
-        )
-        
-        if isinstance(result, dict) and 'movies' in result:
-            movies = result['movies']
-            series = result['series']
-            
-            # Filtra por tipo se especificado
-            if content_type == 'movie':
-                series = []
-            elif content_type == 'series':
-                movies = []
-            
-            # Aplica limite
-            if limit and limit > 0:
-                movies = movies[:limit]
-                series = series[:limit]
-            
+
+        valid_types = ('movie', 'series', 'anime', 'all')
+        if content_type not in valid_types:
             return jsonify({
-                'success': True,
-                'summary': {
-                    'total': len(movies) + len(series),
-                    'movies': len(movies),
-                    'series': len(series)
-                },
-                'data': {
-                    'movies': movies,
-                    'series': series
-                }
-            })
-        else:
-            # Lista simples
-            items = result if isinstance(result, list) else []
-            
-            if limit and limit > 0:
-                items = items[:limit]
-            
-            return jsonify({
-                'success': True,
-                'count': len(items),
-                'data': items
-            })
-            
+                'success': False,
+                'error': 'Tipo invalido. Use: movie, series, anime, all'
+            }), 400
+
+        print("\n Carregando catalogo: type=" + content_type + " limit=" + str(limit))
+
+        items = scrape_all_catalog(content_type=content_type, limit=limit)
+
+        movies = [i for i in items if i.get('type') == 'movie']
+        series = [i for i in items if i.get('type') == 'series']
+        animes = [i for i in items if i.get('type') == 'anime']
+
+        print(" Catalogo: " + str(len(items)) + " itens (" + str(len(movies)) + " filmes, " + str(len(series)) + " series, " + str(len(animes)) + " animes)")
+
+        return jsonify({
+            'success': True,
+            'summary': {
+                'total': len(items),
+                'movies': len(movies),
+                'series': len(series),
+                'animes': len(animes)
+            },
+            'type': content_type,
+            'limit': limit,
+            'items': items
+        })
+
     except Exception as e:
-        print(f"Erro em /api/catalog: {e}")
+        print("Erro em /api/catalog: " + str(e))
         import traceback
         traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
+
 
 @app.route('/api/video-url', methods=['POST'])
 def get_video_url():
