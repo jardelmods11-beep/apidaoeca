@@ -4,6 +4,177 @@ import time
 import re
 from urllib.parse import urljoin, urlparse, parse_qs
 import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# =============================================================================
+# SCRAPING DIRETO POR PÁGINA (sem login) - filmes, séries, animes
+# =============================================================================
+
+_PAGE_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8',
+    'Connection': 'keep-alive',
+}
+
+
+def _page_fetch(url: str):
+    """Busca e parseia uma página HTML sem autenticação."""
+    try:
+        response = requests.get(url, headers=_PAGE_HEADERS, timeout=30)
+        response.raise_for_status()
+        return BeautifulSoup(response.text, 'html.parser')
+    except requests.RequestException as e:
+        logger.error(f"Erro ao buscar {url}: {e}")
+        return None
+
+
+def _extract_slug(href: str) -> str:
+    """Extrai o slug de uma URL /watch/slug."""
+    return href.rstrip('/').split('/watch/')[-1] if '/watch/' in href else ''
+
+
+def _parse_section_items(section_tag) -> list:
+    """Parseia todos os cards dentro de uma section.listContent."""
+    items = []
+    for slide in section_tag.select('div.swiper-slide.item.poster'):
+        try:
+            content_div = slide.select_one('div.content')
+            poster = ''
+            if content_div and content_div.get('style'):
+                m = re.search(r'url\(([^)]+)\)', content_div['style'])
+                if m:
+                    poster = m.group(1).strip("'\"")
+
+            title_tag = slide.select_one('div.info h6')
+            title = title_tag.get_text(strip=True) if title_tag else ''
+
+            duration, year, imdb = '', '', ''
+            for span in slide.select('p.tags span'):
+                text = span.get_text(strip=True)
+                inner = span.decode_contents()
+                if 'Min' in text or 'Temporada' in text:
+                    duration = text
+                elif re.match(r'^\d{4}$', text):
+                    year = text
+                elif 'IMDb' in inner:
+                    imdb = re.sub(r'<[^>]+>', '', inner).replace('IMDb', '').strip()
+
+            watch_a = slide.select_one('div.buttons a.btn')
+            watch_url, slug = '', ''
+            if watch_a and watch_a.get('href'):
+                watch_url = watch_a['href']
+                slug = _extract_slug(watch_url)
+
+            if title and slug:
+                items.append({
+                    'title': title,
+                    'slug': slug,
+                    'url': watch_url,
+                    'poster': poster,
+                    'year': year,
+                    'duration': duration,
+                    'imdb': imdb,
+                })
+        except Exception as e:
+            logger.debug(f"Erro ao parsear card: {e}")
+    return items
+
+
+def _parse_full_page(soup, forced_type: str, rename_queridos: bool = False) -> list:
+    """
+    Percorre TODAS as secoes da pagina e coleta os itens.
+    forced_type: tipo forcado em todos os itens (movie, series, anime)
+    rename_queridos: se True, renomeia 'Queridinhos do VisionCine' -> 'Queridinhos do BLUECINE'
+    """
+    all_items = []
+    seen = set()
+
+    for col in soup.select('div.col-12'):
+        h6 = col.select_one('div.topList h6')
+        section = col.select_one('section.listContent')
+        if not h6 or not section:
+            continue
+
+        section_name = h6.get_text(strip=True)
+
+        if rename_queridos and section_name == 'Queridinhos do VisionCine':
+            section_name = 'Queridinhos do BLUECINE'
+
+        for item in _parse_section_items(section):
+            if item['slug'] not in seen:
+                seen.add(item['slug'])
+                item['type'] = forced_type
+                item['section'] = section_name
+                all_items.append(item)
+
+    return all_items
+
+
+def scrape_movies(limit: int = None) -> list:
+    """
+    Scraping de https://cnvsweb.stream/movies
+    Retorna todos os filmes sem limite por padrao.
+    Queridinhos do VisionCine vira Queridinhos do BLUECINE.
+    """
+    logger.info('Scraping filmes: cnvsweb.stream/movies')
+    soup = _page_fetch('https://cnvsweb.stream/movies')
+    if not soup:
+        return []
+    items = _parse_full_page(soup, forced_type='movie', rename_queridos=True)
+    return items[:limit] if limit else items
+
+
+def scrape_series(limit: int = None) -> list:
+    """
+    Scraping de https://cnvsweb.stream/tvseries
+    Retorna todas as series sem limite por padrao.
+    Queridinhos do VisionCine vira Queridinhos do BLUECINE.
+    """
+    logger.info('Scraping series: cnvsweb.stream/tvseries')
+    soup = _page_fetch('https://cnvsweb.stream/tvseries')
+    if not soup:
+        return []
+    items = _parse_full_page(soup, forced_type='series', rename_queridos=True)
+    return items[:limit] if limit else items
+
+
+def scrape_animes(limit: int = None) -> list:
+    """
+    Scraping de https://cnvsweb.stream/animes
+    Retorna todos os animes sem limite por padrao.
+    """
+    logger.info('Scraping animes: cnvsweb.stream/animes')
+    soup = _page_fetch('https://cnvsweb.stream/animes')
+    if not soup:
+        return []
+    items = _parse_full_page(soup, forced_type='anime', rename_queridos=False)
+    return items[:limit] if limit else items
+
+
+def scrape_all_catalog(content_type: str = 'all', limit: int = None) -> list:
+    """
+    Scraping completo ou filtrado por tipo.
+
+    Parametros:
+        content_type: 'movie' | 'series' | 'anime' | 'all'  (padrao: 'all')
+        limit: numero maximo de resultados. None = sem limite (padrao)
+
+    Retorno:
+        Lista de dicts com: title, slug, url, poster, year, duration, imdb, type, section
+    """
+    results = []
+    if content_type in ('movie', 'all'):
+        results.extend(scrape_movies())
+    if content_type in ('series', 'all'):
+        results.extend(scrape_series())
+    if content_type in ('anime', 'all'):
+        results.extend(scrape_animes())
+    return results[:limit] if limit else results
+
 
 class CNVSWebScraper:
     def __init__(self, token):
